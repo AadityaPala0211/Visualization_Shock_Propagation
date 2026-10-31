@@ -8,7 +8,6 @@ from pathlib import Path
 import streamlit as st
 from scipy import sparse
 from scipy.sparse.linalg import eigs
-from streamlit_plotly_events import plotly_events
 
 # Place the research repository's results_network_analysis folder beside app.py.
 # Expected local paths mirror the research repository's directory structure.
@@ -18,7 +17,7 @@ NODE_INDEX_PATH = RESULTS_NETWORK_DIR / "metadata" / "node_index.csv"
 NODE_METRICS_PATH = RESULTS_NETWORK_DIR / "empirical" / "2022" / "WD" / "node_metrics.csv.gz"
 SECTOR_SUMMARY_PATH = RESULTS_NETWORK_DIR / "empirical" / "2022" / "WD" / "sector_summary.csv"
 
-@st.cache_data(show_spinner="Loading the local 2022 production network…")
+@st.cache_data(show_spinner=False)
 def load_network():
     required_files = [WD_MATRIX_PATH, NODE_INDEX_PATH, NODE_METRICS_PATH, SECTOR_SUMMARY_PATH]
     missing_files = [str(path.relative_to(Path(__file__).resolve().parent))
@@ -126,13 +125,16 @@ def make_figure(B, labels, state, source, max_nodes=48):
         paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
         xaxis=dict(visible=False),yaxis=dict(visible=False),showlegend=False,
         clickmode="event+select")
-    return fig
+    return fig, chosen
 
 st.set_page_config(page_title="2022 Production Network Shock Explorer",page_icon="🌐",layout="wide")
 st.title("How a shock travels through global production")
 st.caption("A focused, interactive view of the 2022 OECD ICIO supplier–buyer network.")
 try:
+    load_bar = st.progress(5, text="Loading local 2022 network files…")
     B,node_index,metrics,sector_summary = load_network()
+    load_bar.progress(100, text="2022 network data loaded")
+    load_bar.empty()
 except Exception as exc:
     st.error(f"Could not load the persisted 2022 research network: {exc}")
     st.info("Check that the results_network_analysis folder is beside app.py and contains the four expected 2022 WD files.")
@@ -171,7 +173,8 @@ if degree[source] == 0:
             st.session_state.source_node = replacement
             st.rerun()
 
-rho_radius = get_spectral_radius(B)
+with st.spinner("Calculating the network spectral radius…"):
+    rho_radius = get_spectral_radius(B)
 beta_critical = rho/rho_radius if rho_radius > 0 else float("inf")
 beta = eta*beta_critical if np.isfinite(beta_critical) else 0.0
 history = run_sis(B,source,severity_pct/100,beta,rho,steps)
@@ -184,13 +187,27 @@ c1,c2,c3 = st.columns(3)
 c1.metric("Activities in graph","Up to 48",help="Only a small source-reachable neighbourhood is shown, not all 4,050 activities.")
 c2.metric("Activities with a shock",f"{int(np.count_nonzero(state>1e-6)):,}")
 c3.metric("Strongest remaining shock",f"{state.max():.1%}")
-st.caption("Arrows point from supplier to buyer. Bright, opaque arrows carry stronger shock pressure; faint arrows carry weaker pressure. Arrow intensity fades as the shock weakens downstream. The blue ring marks the original source.")
-fig = make_figure(B,labels,state,source)
-clicked = plotly_events(fig,click_event=True,select_event=False,hover_event=False,override_height=610,key="focused_network_click")
-if clicked:
-    point = clicked[0].get("customdata")
-    if point is not None and labels[int(point)] != st.session_state.source_node:
-        st.session_state.source_node = labels[int(point)]
+st.caption("Arrows point from supplier to buyer. Bright, opaque arrows carry stronger shock pressure; faint arrows carry weaker pressure. Arrow intensity fades as the shock weakens downstream. The blue ring marks the original source. Select a node to make it the next shock source.")
+with st.spinner("Building the focused network diagram…"):
+    fig, displayed_nodes = make_figure(B,labels,state,source)
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    key="focused_network_click",
+    on_select="rerun",
+    selection_mode="points",
+)
+selection = st.session_state.get("focused_network_click", {})
+selected_points = selection.get("selection", {}).get("points", [])
+if selected_points:
+    point = selected_points[-1]
+    node_id = point.get("customdata")
+    if node_id is None:
+        point_index = point.get("point_index")
+        if point_index is not None and 0 <= int(point_index) < len(displayed_nodes):
+            node_id = displayed_nodes[int(point_index)]
+    if node_id is not None and labels[int(node_id)] != st.session_state.source_node:
+        st.session_state.source_node = labels[int(node_id)]
         st.rerun()
 
 st.markdown("### 3. What does the model calculate?")
