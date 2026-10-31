@@ -1,6 +1,5 @@
 from __future__ import annotations
 from collections import deque
-import networkx as nx
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -62,70 +61,132 @@ def run_sis(B, source, severity, beta, rho, steps):
 def get_sector(label): return label.split("_", 1)[1] if "_" in label else label
 def get_country(label): return label.split("_", 1)[0] if "_" in label else ""
 
-def propagation_subset(B, source, state, max_nodes=48, max_hops=3):
-    """Show only a small source-reachable outgoing neighbourhood."""
-    selected = {int(source)}
-    frontier = [int(source)]
-    for _ in range(max_hops):
-        candidates = {}
-        for node in frontier:
-            row = B.getrow(node)
-            for target, weight in zip(row.indices, row.data):
-                target = int(target)
-                if target not in selected:
-                    score = float(weight) * (0.25 + float(state[target]))
-                    candidates[target] = max(candidates.get(target, 0.0), score)
-        if not candidates: break
-        room = max_nodes - len(selected)
-        frontier = sorted(candidates, key=candidates.get, reverse=True)[:max(0, room)]
-        selected.update(frontier)
-        if len(selected) >= max_nodes: break
-    return [source] + sorted(selected - {source}, key=lambda i: state[i], reverse=True)
+def focus_neighbourhood(B, focus, max_neighbours=28):
+    """Return strongest incoming and outgoing neighbours of one focal activity."""
+    outgoing = B.getrow(focus)
+    incoming = B.getcol(focus).tocoo()
+    # Keep both directions visible; split the neighbour budget between them.
+    half = max_neighbours // 2
+    out_pairs = sorted(zip(outgoing.indices.tolist(), outgoing.data.tolist()),
+                       key=lambda item: item[1], reverse=True)[:half]
+    in_pairs = sorted(zip(incoming.row.tolist(), incoming.data.tolist()),
+                      key=lambda item: item[1], reverse=True)[:max_neighbours-half]
+    neighbours = {}
+    for node, weight in out_pairs:
+        if int(node) != focus:
+            neighbours[int(node)] = max(neighbours.get(int(node), 0.0), float(weight))
+    for node, weight in in_pairs:
+        if int(node) != focus:
+            neighbours[int(node)] = max(neighbours.get(int(node), 0.0), float(weight))
+    # If one direction has few links, fill remaining slots from the other direction.
+    if len(neighbours) < max_neighbours:
+        candidates = sorted(
+            [(int(n), float(w)) for n, w in zip(outgoing.indices, outgoing.data)] +
+            [(int(n), float(w)) for n, w in zip(incoming.row, incoming.data)],
+            key=lambda item: item[1], reverse=True)
+        for node, weight in candidates:
+            if node != focus and node not in neighbours:
+                neighbours[node] = weight
+                if len(neighbours) >= max_neighbours:
+                    break
+    return [focus] + list(neighbours.keys()), neighbours
 
-def make_figure(B, labels, state, source, max_nodes=48):
-    chosen = propagation_subset(B, source, state, max_nodes=max_nodes)
-    sub = B[chosen, :][:, chosen].tocsr()
-    graph = nx.from_scipy_sparse_array(sub, create_using=nx.DiGraph)
-    pos = nx.spring_layout(graph, seed=17, k=0.9/np.sqrt(len(chosen)), iterations=55, weight="weight")
-    coo = sub.tocoo()
-    all_edges = [(int(i), int(j), float(w)) for i,j,w in zip(coo.row,coo.col,coo.data) if i != j]
-    active_edges = [(i,j,w) for i,j,w in all_edges if state[chosen[i]] > 1e-7]
-    pressures = [state[chosen[i]]*w for i,j,w in active_edges]
-    max_pressure = max(pressures, default=0.0)
+def make_figure(B, labels, state, focus, max_neighbours=28):
+    """Fast radial ego view: no force simulation, only links touching the focus."""
+    chosen, weights = focus_neighbourhood(B, focus, max_neighbours)
+    neighbour_ids = chosen[1:]
+    count = len(neighbour_ids)
+    positions = {focus: (0.0, 0.0)}
+    if count:
+        # Deterministic circular layout: O(number of displayed neighbours).
+        angles = np.linspace(0, 2*np.pi, count, endpoint=False) + np.pi/2
+        for node, angle in zip(neighbour_ids, angles):
+            positions[node] = (float(np.cos(angle)), float(np.sin(angle)))
+
     fig = go.Figure()
-    ex, ey = [], []
-    for i,j,w in all_edges:
-        ex += [pos[i][0],pos[j][0],None]; ey += [pos[i][1],pos[j][1],None]
-    fig.add_trace(go.Scatter(x=ex,y=ey,mode="lines",
-        line=dict(width=.8,color="rgba(130,145,165,.20)"),hoverinfo="skip",name="Possible route"))
-    # Directional arrows show current supplier-to-buyer shock pressure.
-    for (i,j,w), pressure in zip(active_edges,pressures):
-        intensity = pressure/max_pressure if max_pressure else 0.0
-        alpha = .12 + .86*(intensity**.55)
-        colour = f"rgba(255,{int(175-150*intensity)},{int(70-55*intensity)},{alpha:.3f})"
-        fig.add_annotation(x=pos[j][0],y=pos[j][1],ax=pos[i][0],ay=pos[i][1],
-            xref="x",yref="y",axref="x",ayref="y",showarrow=True,arrowhead=3,
-            arrowsize=1.0,arrowwidth=1.2+1.8*intensity,arrowcolor=colour,
-            standoff=9,startstandoff=10)
-    node_state = [float(state[i]) for i in chosen]
-    node_labels = [labels[i].replace("_"," · ") for i in chosen]
-    hover = [f"<b>{labels[i]}</b><br>Shock intensity: {state[i]:.1%}<br>{'Initial shock source' if i == source else 'Exposed activity'}" for i in chosen]
-    fig.add_trace(go.Scatter(x=[pos[i][0] for i in range(len(chosen))],
-        y=[pos[i][1] for i in range(len(chosen))],mode="markers+text",
-        text=node_labels,textposition="top center",textfont=dict(size=9,color="#cbd5e1"),
-        customdata=chosen,hovertext=hover,hoverinfo="text",
-        marker=dict(size=[17+18*x for x in node_state],color=node_state,
-        colorscale=[[0,"#dbeafe"],[.25,"#facc15"],[.65,"#f97316"],[1,"#b91c1c"]],
-        cmin=0,cmax=1,colorbar=dict(title="Shock<br>intensity"),
-        line=dict(width=1,color="#334155")),name="Activities"))
-    fig.add_trace(go.Scatter(x=[pos[0][0]],y=[pos[0][1]],mode="markers",
-        marker=dict(size=30,color="#38bdf8",symbol="circle-open",line=dict(width=3)),
-        hoverinfo="skip",showlegend=False))
-    fig.update_layout(height=610,margin=dict(l=8,r=8,t=8,b=8),
-        paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(visible=False),yaxis=dict(visible=False),showlegend=False,
-        clickmode="event+select")
-    return fig, chosen
+    # Draw only edges incident to the focal activity, not every edge in a multi-hop subgraph.
+    line_x, line_y = [], []
+    for node in neighbour_ids:
+        x0, y0 = positions[focus]
+        x1, y1 = positions[node]
+        line_x.extend([x0, x1, None])
+        line_y.extend([y0, y1, None])
+    fig.add_trace(go.Scatter(
+        x=line_x, y=line_y, mode="lines",
+        line=dict(width=1.1, color="rgba(130,145,165,.30)"),
+        hoverinfo="skip", name="Connections"
+    ))
+
+    # Directional arrows: incoming suppliers point into focus; outgoing buyers point away.
+    for node in neighbour_ids:
+        node_to_focus = float(B[node, focus])
+        focus_to_node = float(B[focus, node])
+        x1, y1 = positions[node]
+        pressure_in = float(state[node]) * node_to_focus
+        pressure_out = float(state[focus]) * focus_to_node
+        for is_incoming, weight, pressure in (
+            (True, node_to_focus, pressure_in),
+            (False, focus_to_node, pressure_out)
+        ):
+            if weight <= 0 or pressure <= 1e-9:
+                continue
+            intensity = min(1.0, pressure / max(float(np.max(state)), 1e-9))
+            red = int(105 + 150*intensity)
+            green = int(75*(1-intensity))
+            colour = f"rgba({red},{green},35,{0.25+0.75*intensity:.2f})"
+            if is_incoming:
+                # Supplier node -> focal buyer
+                fig.add_annotation(x=0, y=0, ax=x1, ay=y1,
+                    xref="x", yref="y", axref="x", ayref="y",
+                    showarrow=True, arrowhead=3, arrowsize=1,
+                    arrowwidth=1.2+2.0*intensity, arrowcolor=colour,
+                    standoff=19, startstandoff=19)
+            else:
+                # Focal supplier -> buyer node
+                fig.add_annotation(x=x1, y=y1, ax=0, ay=0,
+                    xref="x", yref="y", axref="x", ayref="y",
+                    showarrow=True, arrowhead=3, arrowsize=1,
+                    arrowwidth=1.2+2.0*intensity, arrowcolor=colour,
+                    standoff=19, startstandoff=19)
+
+    ids = [focus] + neighbour_ids
+    xs = [positions[i][0] for i in ids]
+    ys = [positions[i][1] for i in ids]
+    values = [float(state[i]) for i in ids]
+    labels_short = [labels[i].replace("_", " · ") for i in ids]
+    hover = [
+        f"<b>{labels[i]}</b><br>Modelled shock: {state[i]:.2%}<br>" +
+        ("Selected focus activity" if i == focus else
+         f"Dependency weight to/from focus: {weights.get(i, 0.0):.4%}")
+        for i in ids
+    ]
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers+text",
+        text=labels_short, textposition="top center",
+        textfont=dict(size=10, color="#e2e8f0"),
+        customdata=ids, hovertext=hover, hoverinfo="text",
+        marker=dict(
+            size=[34] + [20 + 15*v for v in values[1:]],
+            color=values,
+            colorscale=[[0, "#64748b"], [0.03, "#fca5a5"],
+                        [0.35, "#ef4444"], [1, "#7f1d1d"]],
+            cmin=0, cmax=1,
+            colorbar=dict(title="Shock<br>intensity"),
+            line=dict(width=[3] + [1]*len(neighbour_ids),
+                      color=["#f8fafc"] + ["#334155"]*len(neighbour_ids))
+        ),
+        name="Activities"
+    ))
+    fig.update_layout(
+        height=590, margin=dict(l=20, r=35, t=35, b=20),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(visible=False, range=[-1.45, 1.45], fixedrange=True),
+        yaxis=dict(visible=False, range=[-1.35, 1.35], fixedrange=True,
+                   scaleanchor="x", scaleratio=1),
+        showlegend=False, clickmode="event+select",
+        annotations=fig.layout.annotations
+    )
+    return fig, ids
 
 st.set_page_config(page_title="2022 Production Network Shock Explorer",page_icon="🌐",layout="wide")
 st.title("How a shock travels through global production")
@@ -159,7 +220,12 @@ source_name = st.selectbox("1. Choose the activity hit first",labels,
     index=labels.index(st.session_state.source_node),
     format_func=lambda x:x.replace("_"," · "))
 source = label_to_id[source_name]
+if st.session_state.get("previous_source_node") != source_name:
+    st.session_state.focus_node = source_name
+    st.session_state.previous_source_node = source_name
 st.session_state.source_node = source_name
+if "focus_node" not in st.session_state:
+    st.session_state.focus_node = source_name
 degree = np.asarray(B.getnnz(axis=0)).ravel()+np.asarray(B.getnnz(axis=1)).ravel()
 if degree[source] == 0:
     st.warning("This activity has no retained links in the 2022 network (τ = 0.001), so a shock cannot travel from it.")
@@ -183,13 +249,18 @@ st.markdown("### 2. Watch the shock move")
 st.markdown(f"**{source_name.replace('_',' · ')}** is hit first with a **{severity_pct}%** shock. At each step, disruption is transmitted from a supplier to the activities that buy from it. Those activities can then pass exposure to their own buyers.")
 step = st.slider("Propagation timeline — move this slider to inspect each step",0,len(history)-1,len(history)-1)
 state = history[step]
+focus_name = st.selectbox("Zoom into an activity", labels,
+    index=labels.index(st.session_state.focus_node),
+    format_func=lambda x:x.replace("_"," · "),
+    key="focus_selector")
+focus = label_to_id[focus_name]
+focus_shock = float(state[focus])
 c1,c2,c3 = st.columns(3)
-c1.metric("Activities in graph","Up to 48",help="Only a small source-reachable neighbourhood is shown, not all 4,050 activities.")
-c2.metric("Activities with a shock",f"{int(np.count_nonzero(state>1e-6)):,}")
-c3.metric("Strongest remaining shock",f"{state.max():.1%}")
-st.caption("Arrows point from supplier to buyer. Bright, opaque arrows carry stronger shock pressure; faint arrows carry weaker pressure. Arrow intensity fades as the shock weakens downstream. The blue ring marks the original source. Select a node to make it the next shock source.")
-with st.spinner("Building the focused network diagram…"):
-    fig, displayed_nodes = make_figure(B,labels,state,source)
+c1.metric("Focused neighbours", "Up to 28")
+c2.metric("Shock at focused activity", f"{focus_shock:.2%}")
+c3.metric("Activities affected in network", f"{int(np.count_nonzero(state>1e-6)):,}")
+st.caption("The selected activity is centred. Its strongest incoming suppliers and outgoing buyers are arranged around it. Grey nodes are not currently affected; affected nodes turn red in proportion to their modelled shock. Arrows point from supplier to buyer. Click a neighbour to zoom into it without restarting the original shock.")
+fig, displayed_nodes = make_figure(B,labels,state,focus)
 st.plotly_chart(
     fig,
     use_container_width=True,
@@ -206,8 +277,8 @@ if selected_points:
         point_index = point.get("point_index")
         if point_index is not None and 0 <= int(point_index) < len(displayed_nodes):
             node_id = displayed_nodes[int(point_index)]
-    if node_id is not None and labels[int(node_id)] != st.session_state.source_node:
-        st.session_state.source_node = labels[int(node_id)]
+    if node_id is not None and 0 <= int(node_id) < len(labels):
+        st.session_state.focus_node = labels[int(node_id)]
         st.rerun()
 
 st.markdown("### 3. What does the model calculate?")
