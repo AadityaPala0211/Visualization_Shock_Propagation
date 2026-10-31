@@ -137,20 +137,23 @@ def make_figure(B, labels, state, focus, max_neighbours=28):
             red = int(105 + 150*intensity)
             green = int(75*(1-intensity))
             colour = f"rgba({red},{green},35,{0.25+0.75*intensity:.2f})"
+            # Place a prominent arrowhead halfway along each connection,
+            # clear of the node markers. Plotly's arrow tip is at (x, y).
             if is_incoming:
-                # Supplier node -> focal buyer
-                fig.add_annotation(x=0, y=0, ax=x1, ay=y1,
-                    xref="x", yref="y", axref="x", ayref="y",
-                    showarrow=True, arrowhead=3, arrowsize=1,
-                    arrowwidth=1.2+2.0*intensity, arrowcolor=colour,
-                    standoff=19, startstandoff=19)
+                # Supplier node -> focal buyer: arrow points inward.
+                tip_x, tip_y = 0.43*x1, 0.43*y1
+                tail_x, tail_y = 0.70*x1, 0.70*y1
             else:
-                # Focal supplier -> buyer node
-                fig.add_annotation(x=x1, y=y1, ax=0, ay=0,
-                    xref="x", yref="y", axref="x", ayref="y",
-                    showarrow=True, arrowhead=3, arrowsize=1,
-                    arrowwidth=1.2+2.0*intensity, arrowcolor=colour,
-                    standoff=19, startstandoff=19)
+                # Focal supplier -> buyer node: arrow points outward.
+                tip_x, tip_y = 0.70*x1, 0.70*y1
+                tail_x, tail_y = 0.43*x1, 0.43*y1
+            fig.add_annotation(
+                x=tip_x, y=tip_y, ax=tail_x, ay=tail_y,
+                xref="x", yref="y", axref="x", ayref="y",
+                showarrow=True, arrowhead=2, arrowsize=2.2,
+                arrowwidth=3.0+1.5*intensity, arrowcolor=colour,
+                standoff=0, startstandoff=0
+            )
 
     ids = [focus] + neighbour_ids
     xs = [positions[i][0] for i in ids]
@@ -269,7 +272,7 @@ c1,c2,c3 = st.columns(3)
 c1.metric("Focused neighbours", "Up to 28")
 c2.metric("Shock at focused activity", f"{focus_shock:.2%}")
 c3.metric("Activities affected in network", f"{int(np.count_nonzero(state>1e-6)):,}")
-st.caption("The selected activity is centred. Its strongest incoming suppliers and outgoing buyers are arranged around it. Grey nodes are not currently affected; affected nodes turn red in proportion to their modelled shock. Arrows point from supplier to buyer. Click a neighbour to zoom into it without restarting the original shock.")
+st.caption("The selected activity is centred. Large arrowheads sit midway along each connection. Arrows pointing toward the centre mean supplier → selected activity; arrows pointing away mean selected activity → buyer. Grey nodes are not currently affected; redder nodes have stronger modelled shocks. Click a neighbour to zoom into it without restarting the original shock.")
 fig, displayed_nodes = make_figure(B,labels,state,focus)
 st.plotly_chart(
     fig,
