@@ -1,33 +1,37 @@
 from __future__ import annotations
 from collections import deque
-from io import BytesIO
 import networkx as nx
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import requests
+from pathlib import Path
 import streamlit as st
 from scipy import sparse
 from scipy.sparse.linalg import eigs
 from streamlit_plotly_events import plotly_events
 
-RESEARCH_RAW = "https://raw.githubusercontent.com/AadityaPala0211/International_Trade_Shock_Analysis/main/results_network_analysis"
-WD_MATRIX_URL = f"{RESEARCH_RAW}/empirical/2022/WD/adjacency.npz"
-NODE_INDEX_URL = f"{RESEARCH_RAW}/metadata/node_index.csv"
-NODE_METRICS_URL = f"{RESEARCH_RAW}/empirical/2022/WD/node_metrics.csv.gz"
-SECTOR_SUMMARY_URL = f"{RESEARCH_RAW}/empirical/2022/WD/sector_summary.csv"
+# Place the research repository's results_network_analysis folder beside app.py.
+# Expected local paths mirror the research repository's directory structure.
+RESULTS_NETWORK_DIR = Path(__file__).resolve().parent / "results_network_analysis"
+WD_MATRIX_PATH = RESULTS_NETWORK_DIR / "empirical" / "2022" / "WD" / "adjacency.npz"
+NODE_INDEX_PATH = RESULTS_NETWORK_DIR / "metadata" / "node_index.csv"
+NODE_METRICS_PATH = RESULTS_NETWORK_DIR / "empirical" / "2022" / "WD" / "node_metrics.csv.gz"
+SECTOR_SUMMARY_PATH = RESULTS_NETWORK_DIR / "empirical" / "2022" / "WD" / "sector_summary.csv"
 
-@st.cache_data(show_spinner="Loading the 2022 production network…")
+@st.cache_data(show_spinner="Loading the local 2022 production network…")
 def load_network():
-    session = requests.Session()
-    response = session.get(WD_MATRIX_URL, timeout=90); response.raise_for_status()
-    matrix = sparse.load_npz(BytesIO(response.content)).tocsr()
-    response = session.get(NODE_INDEX_URL, timeout=60); response.raise_for_status()
-    index = pd.read_csv(BytesIO(response.content))
-    response = session.get(NODE_METRICS_URL, timeout=60); response.raise_for_status()
-    metrics = pd.read_csv(BytesIO(response.content), compression="gzip")
-    response = session.get(SECTOR_SUMMARY_URL, timeout=60); response.raise_for_status()
-    sectors = pd.read_csv(BytesIO(response.content))
+    required_files = [WD_MATRIX_PATH, NODE_INDEX_PATH, NODE_METRICS_PATH, SECTOR_SUMMARY_PATH]
+    missing_files = [str(path.relative_to(Path(__file__).resolve().parent))
+                     for path in required_files if not path.is_file()]
+    if missing_files:
+        raise FileNotFoundError(
+            "The local 2022 research data files are missing. Expected these paths "
+            "relative to the folder containing app.py: " + ", ".join(missing_files)
+        )
+    matrix = sparse.load_npz(WD_MATRIX_PATH).tocsr()
+    index = pd.read_csv(NODE_INDEX_PATH)
+    metrics = pd.read_csv(NODE_METRICS_PATH, compression="gzip")
+    sectors = pd.read_csv(SECTOR_SUMMARY_PATH)
     if matrix.shape != (4050, 4050) or len(index) != 4050:
         raise ValueError("Expected the aligned 4,050-node 2022 research network.")
     index = index.sort_values("node_id").reset_index(drop=True)
@@ -131,7 +135,7 @@ try:
     B,node_index,metrics,sector_summary = load_network()
 except Exception as exc:
     st.error(f"Could not load the persisted 2022 research network: {exc}")
-    st.info("Check the internet connection and public research repository.")
+    st.info("Check that the results_network_analysis folder is beside app.py and contains the four expected 2022 WD files.")
     st.stop()
 
 labels = node_index.node.astype(str).tolist()
