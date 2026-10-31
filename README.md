@@ -1,6 +1,6 @@
-# 2022 Interactive Shock Propagation
+# 2022 Production Network Shock Explorer
 
-An interactive Streamlit visualization of the **2022 OECD ICIO weighted-directed production network**, using the exact persisted WD matrix from [International_Trade_Shock_Analysis](https://github.com/AadityaPala0211/International_Trade_Shock_Analysis).
+A focused interactive Streamlit visualization of the **2022 OECD ICIO weighted-directed production network**, using the persisted empirical network from [International_Trade_Shock_Analysis](https://github.com/AadityaPala0211/International_Trade_Shock_Analysis).
 
 ## Run locally
 
@@ -11,22 +11,27 @@ python -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app downloads and caches the 2022 WD adjacency matrix, node index, node metrics and sector summary from the public research repository. It does not parse the 90 MB raw CSV on each run. The 2019 CSV is intentionally unused.
+The app downloads and caches the 2022 WD adjacency matrix, node index, node metrics and sector summary. The 2019 data are not used.
 
-## Interaction
+## How to use
 
-1. Select a country–industry activity or click a node in the graph.
-2. Set initial shock severity, recovery rate, threshold-normalised transmission and propagation steps.
-3. Inspect the network at a selected step and the most affected activities.
-4. If the selected node has no retained WD links at τ = 0.001, choose from the five strongest connected sectors and the top five activities within that sector.
+1. Select the country–industry activity hit by the initial shock.
+2. Set the initial shock percentage, recovery rate, transmission multiplier and simulation horizon.
+3. Move the propagation timeline slider to inspect shock intensity at each step.
+4. Click another activity in the graph to make it the new initial shock source.
+5. If the chosen activity is isolated at the research threshold, choose one of the five strongest connected sectors and one of the top five activities in that sector.
 
-## Research consistency
+## Reading the graph
 
-- 4,050 country–industry nodes; supplier → buyer direction.
-- WD weights are dependency shares P(i,j) = Z(i,j) / total intermediate purchases of buyer j.
+The graph displays at most 48 activities in the selected source's outgoing, source-reachable neighbourhood, not the full 4,050-node network. Arrows point from supplier to buyer. Bright, opaque arrows indicate stronger current shock pressure; faint arrows indicate weaker pressure. Arrow intensity fades downstream as the modelled shock weakens. The blue ring marks the initial shock source.
+
+## Research consistency and interpretation
+
+- 4,050 country–industry activities; supplier-to-buyer orientation.
+- WD weights are dependency shares: P(i,j) = Z(i,j) / total intermediate purchases of buyer j.
 - Self-use remains in the denominator; diagonal graph edges are excluded.
-- Uses the persisted research network at the analyst-selected threshold τ = 0.001.
-- Uses research Model A, with beta = eta × beta-critical and beta-critical = rho / spectral-radius(B).
-- The selected node starts at the chosen severity; all other nodes start at zero.
+- Uses the persisted 2022 WD network at the analyst-selected threshold τ = 0.001.
+- Uses research Model A (deterministic mass-action/bilinear SIS); exposure received by buyer j is (Bᵀd)j.
+- Critical transmission is βc = ρ / λmax(B); applied transmission is β = η × βc.
 
-The visualization displays counterfactual model states, **not observed production losses or monetary forecasts**. The SIS model does not estimate substitution gains.
+The initial shock percentage is a starting **model intensity**, not an observed output reduction. Results are counterfactual propagation indices, not calibrated production-loss or monetary forecasts. The SIS model represents propagation and recovery; it does not estimate substitution gains.
