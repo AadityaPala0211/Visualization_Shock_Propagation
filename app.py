@@ -38,9 +38,11 @@ def load_network():
     return matrix, index, metrics, sectors
 
 @st.cache_data(show_spinner=False)
-def get_spectral_radius(matrix):
-    if matrix.nnz == 0: return 0.0
-    return float(abs(eigs(matrix, k=1, which="LM", return_eigenvectors=False, tol=1e-5, maxiter=3000)[0]))
+def get_spectral_radius(_matrix):
+    # Leading underscore tells Streamlit not to hash the unpickleable SciPy CSR matrix.
+    # The app uses one fixed, persisted 2022 WD matrix, so the cached result is reusable.
+    if _matrix.nnz == 0: return 0.0
+    return float(abs(eigs(_matrix, k=1, which="LM", return_eigenvectors=False, tol=1e-5, maxiter=3000)[0]))
 
 def run_sis(B, source, severity, beta, rho, steps):
     state = np.zeros(B.shape[0], dtype=float)
