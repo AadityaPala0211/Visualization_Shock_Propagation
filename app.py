@@ -40,17 +40,20 @@ def load_network():
     return matrix, index, metrics, sectors
 
 @st.cache_data(show_spinner=False)
-def get_spectral_radius(_matrix):
-    # Leading underscore tells Streamlit not to hash the unpickleable SciPy CSR matrix.
-    # The app uses one fixed, persisted 2022 WD matrix, so the cached result is reusable.
+def get_spectral_radius(_matrix, network_version):
+    # Streamlit skips hashing the SciPy CSR matrix; network_version invalidates
+    # the cached value whenever the local adjacency file is replaced.
     if _matrix.nnz == 0: return 0.0
     return float(abs(eigs(_matrix, k=1, which="LM", return_eigenvectors=False, tol=1e-5, maxiter=3000)[0]))
 
-def run_sis(B, source, severity, beta, rho, steps):
-    state = np.zeros(B.shape[0], dtype=float)
+@st.cache_data(show_spinner="Calculating shock propagation…")
+def run_sis(_B, source, severity, beta, rho, steps, network_version):
+    # _B is excluded from hashing because SciPy CSR matrices are not hashable.
+    # The fixed local network is represented in the cache key by network_version.
+    state = np.zeros(_B.shape[0], dtype=float)
     state[source] = severity
     history = [state.copy()]
-    BT = B.T.tocsr()
+    BT = _B.T.tocsr()
     for _ in range(steps):
         exposure = np.asarray(BT @ state).ravel()
         state = np.clip((1-rho)*state + (1-state)*beta*exposure, 0, 1)
@@ -199,6 +202,10 @@ except Exception as exc:
     st.info("Check that the results_network_analysis folder is beside app.py and contains the four expected 2022 WD files.")
     st.stop()
 
+# Lightweight fingerprint: invalidates cached results if the local adjacency file changes.
+network_stat = WD_MATRIX_PATH.stat()
+network_version = f"{network_stat.st_size}_{network_stat.st_mtime_ns}"
+
 labels = node_index.node.astype(str).tolist()
 label_to_id = {v:i for i,v in enumerate(labels)}
 if "source_node" not in st.session_state: st.session_state.source_node = labels[0]
@@ -241,10 +248,10 @@ if degree[source] == 0:
             st.rerun()
 
 with st.spinner("Calculating the network spectral radius…"):
-    rho_radius = get_spectral_radius(B)
+    rho_radius = get_spectral_radius(B, network_version)
 beta_critical = rho/rho_radius if rho_radius > 0 else float("inf")
 beta = eta*beta_critical if np.isfinite(beta_critical) else 0.0
-history = run_sis(B,source,severity_pct/100,beta,rho,steps)
+history = run_sis(B, source, severity_pct/100, beta, rho, steps, network_version)
 
 st.markdown("### 2. Watch the shock move")
 st.markdown(f"**{source_name.replace('_',' · ')}** is hit first with a **{severity_pct}%** shock. At each step, disruption is transmitted from a supplier to the activities that buy from it. Those activities can then pass exposure to their own buyers.")
