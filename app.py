@@ -172,8 +172,7 @@ def make_figure(B, labels, state, focus, max_neighbours=28):
                         [0.35, "#ef4444"], [1, "#7f1d1d"]],
             cmin=0, cmax=1,
             colorbar=dict(title="Shock<br>intensity"),
-            line=dict(width=[3] + [1]*len(neighbour_ids),
-                      color=["#f8fafc"] + ["#334155"]*len(neighbour_ids))
+            line=dict(width=1.5, color="#334155")
         ),
         name="Activities"
     ))
@@ -183,8 +182,7 @@ def make_figure(B, labels, state, focus, max_neighbours=28):
         xaxis=dict(visible=False, range=[-1.45, 1.45], fixedrange=True),
         yaxis=dict(visible=False, range=[-1.35, 1.35], fixedrange=True,
                    scaleanchor="x", scaleratio=1),
-        showlegend=False, clickmode="event+select",
-        annotations=fig.layout.annotations
+        showlegend=False, clickmode="event+select"
     )
     return fig, ids
 
@@ -226,6 +224,9 @@ if st.session_state.get("previous_source_node") != source_name:
 st.session_state.source_node = source_name
 if "focus_node" not in st.session_state:
     st.session_state.focus_node = source_name
+if st.session_state.get("_focus_widget_sync") != st.session_state.focus_node:
+    st.session_state.focus_selector = st.session_state.focus_node
+    st.session_state._focus_widget_sync = st.session_state.focus_node
 degree = np.asarray(B.getnnz(axis=0)).ravel()+np.asarray(B.getnnz(axis=1)).ravel()
 if degree[source] == 0:
     st.warning("This activity has no retained links in the 2022 network (τ = 0.001), so a shock cannot travel from it.")
@@ -254,6 +255,8 @@ focus_name = st.selectbox("Zoom into an activity", labels,
     format_func=lambda x:x.replace("_"," · "),
     key="focus_selector")
 focus = label_to_id[focus_name]
+st.session_state.focus_node = focus_name
+st.session_state._focus_widget_sync = focus_name
 focus_shock = float(state[focus])
 c1,c2,c3 = st.columns(3)
 c1.metric("Focused neighbours", "Up to 28")
